@@ -940,4 +940,171 @@ function Library:CreateWindow(info)
 
         btn.MouseButton1Click:Connect(function() Window:SelectTab(tab) end)
         btn.MouseEnter:Connect(function() if Window.Current ~= tab then Tween(btn, { TextColor3 = Library.Theme.Text }) end end)
-        btn.MouseLeave:Connect(function() if Window.Current ~= tab then Tween(btn,... (9 KB left)
+        btn.MouseLeave:Connect(function() if Window.Current ~= tab then Tween(btn, { TextColor3 = Library.Theme.DimText }) end end)
+
+        table.insert(self.Tabs, tab)
+        if #self.Tabs == 1 then self:SelectTab(tab) end
+        return tab
+    end
+
+    function Window:SelectTab(tab)
+        self.Current = tab
+        for _, t in ipairs(self.Tabs) do
+            local on = t == tab
+            t.Page.Visible = on
+            Library:ThemeProp(t.Button, "BackgroundColor3", on and "Element" or "Main")
+            Library:ThemeProp(t.Button, "TextColor3", on and "Accent" or "DimText")
+        end
+    end
+
+    function Window:SetVisible(v)
+        self.Visible = v
+        if v then
+            main.Visible = true
+            main.Size = UDim2.fromOffset(size.X.Offset * 0.96, size.Y.Offset * 0.96)
+            Tween(main, { Size = size }, 0.18, Enum.EasingStyle.Back)
+        else
+            Library:ClosePopups()
+            Tween(main, { Size = UDim2.fromOffset(size.X.Offset * 0.96, size.Y.Offset * 0.96) }, 0.12).Completed:Wait()
+            main.Visible = false
+        end
+    end
+    function Window:Toggle() self:SetVisible(not self.Visible) end
+
+    Window.Frame = main
+    table.insert(self.Windows, Window)
+    if info.AutoShow ~= false then main.Visible = true else main.Visible = false; Window.Visible = false end
+    return Window
+end
+
+-- menu toggle key
+Library:Connect(UIS.InputBegan, function(input, gpe)
+    if gpe then return end
+    if input.KeyCode == Library.ToggleKey then Library:Toggle() end
+end)
+function Library:Toggle()
+    for _, w in ipairs(self.Windows) do w:Toggle() end
+end
+function Library:SetToggleKey(keycode)
+    self.ToggleKey = keycode
+    for _, w in ipairs(self.Windows) do w:UpdateHint() end
+end
+
+-- ─────────────────────────────────────────────────────────────────
+--  Config system
+-- ─────────────────────────────────────────────────────────────────
+local hasFS = (typeof(writefile) == "function") and (typeof(readfile) == "function") and (typeof(isfolder) == "function")
+
+function Library:_ConfigPath(name) return self.ConfigFolder .. "/" .. name .. ".json" end
+
+function Library:SaveConfig(name)
+    if not hasFS then return false, "no file system (not in an executor)" end
+    if not isfolder(self.ConfigFolder) then makefolder(self.ConfigFolder) end
+    local data = { toggles = {}, options = {} }
+    for idx, t in pairs(self.Toggles) do data.toggles[idx] = t.Value end
+    for idx, o in pairs(self.Options) do
+        if o.Type == "Slider" or o.Type == "Input" then data.options[idx] = { o.Type, o.Value }
+        elseif o.Type == "Dropdown" then
+            if o.Multi then local t = {}; for k in pairs(o.Value) do t[#t + 1] = k end; data.options[idx] = { o.Type, t, true }
+            else data.options[idx] = { o.Type, o.Value } end
+        elseif o.Type == "ColorPicker" then data.options[idx] = { o.Type, { o.Value.R, o.Value.G, o.Value.B } }
+        elseif o.Type == "KeyPicker" then data.options[idx] = { o.Type, { o.Value, o.Mode } }
+        end
+    end
+    writefile(self:_ConfigPath(name), HttpService:JSONEncode(data))
+    return true
+end
+
+function Library:LoadConfig(name)
+    if not hasFS then return false, "no file system (not in an executor)" end
+    local path = self:_ConfigPath(name)
+    if not isfile(path) then return false, "config not found" end
+    local ok, data = pcall(HttpService.JSONDecode, HttpService, readfile(path))
+    if not ok then return false, "corrupt config" end
+    for idx, v in pairs(data.toggles or {}) do if self.Toggles[idx] then self.Toggles[idx]:SetValue(v) end end
+    for idx, entry in pairs(data.options or {}) do
+        local o = self.Options[idx]
+        if o and o.Type == entry[1] then
+            if o.Type == "Dropdown" and entry[3] then
+                local set = {}; for _, k in ipairs(entry[2]) do set[k] = true end; o:SetValue(set)
+            elseif o.Type == "ColorPicker" then o:SetValue(Color3.new(entry[2][1], entry[2][2], entry[2][3]))
+            else o:SetValue(entry[2]) end
+        end
+    end
+    return true
+end
+
+function Library:ListConfigs()
+    local out = {}
+    if not hasFS or not isfolder(self.ConfigFolder) then return out end
+    for _, f in ipairs(listfiles(self.ConfigFolder)) do
+        local n = f:match("([^/\\]+)%.json$")
+        if n then out[#out + 1] = n end
+    end
+    return out
+end
+
+function Library:DeleteConfig(name)
+    if hasFS and typeof(delfile) == "function" and isfile(self:_ConfigPath(name)) then delfile(self:_ConfigPath(name)) return true end
+    return false
+end
+
+-- ─────────────────────────────────────────────────────────────────
+--  Built-in Settings tab (menu / theme / configs)
+-- ─────────────────────────────────────────────────────────────────
+function Library:BuildSettingsTab(Window)
+    local tab = Window:AddTab("Settings")
+
+    local menu = tab:AddLeftGroupbox("Menu")
+    menu:AddLabel("Menu toggle key"):AddKeyPicker("MenuKeybind", { Default = self.ToggleKey.Name, Modes = { "Toggle" },
+        ChangedCallback = function(k) if Enum.KeyCode[k] then Library:SetToggleKey(Enum.KeyCode[k]) end end })
+    menu:AddToggle("ShowWatermark", { Text = "Show watermark", Default = true, Callback = function(v)
+        if Library.Watermark then Library.Watermark.Visible = v end end })
+    menu:AddButton({ Text = "Unload", DoubleClick = true, Func = function() Library:Unload() end })
+
+    local theme = tab:AddLeftGroupbox("Theme")
+    for _, key in ipairs({ "Accent", "Background", "Main", "Element", "Outline", "Text", "DimText" }) do
+        theme:AddLabel(key):AddColorPicker("Theme_" .. key, { Default = self.Theme[key], Title = key,
+            Callback = function(c) Library:SetTheme(key, c) end })
+    end
+    theme:AddButton("Reset theme", function()
+        local defaults = { Background = Color3.fromRGB(12, 12, 14), Main = Color3.fromRGB(20, 20, 23), Element = Color3.fromRGB(28, 28, 32),
+            Outline = Color3.fromRGB(44, 44, 50), Accent = Color3.fromRGB(0, 220, 170), Text = Color3.fromRGB(235, 235, 240), DimText = Color3.fromRGB(140, 140, 150) }
+        for k, c in pairs(defaults) do Library.Options["Theme_" .. k]:SetValue(c) end
+    end)
+
+    local cfg = tab:AddRightGroupbox("Configs")
+    cfg:AddInput("ConfigName", { Text = "Config name", Placeholder = "my config", Finished = true })
+    local list = cfg:AddDropdown("ConfigList", { Text = "Saved configs", Values = self:ListConfigs(), AllowNull = true })
+    cfg:AddButton("Save", function()
+        local n = Library.Options.ConfigName.Value
+        if n == "" then return Library:Notify("Enter a config name first") end
+        local ok, err = Library:SaveConfig(n)
+        Library:Notify(ok and ("Saved '" .. n .. "'") or ("Save failed: " .. err))
+        list:SetValues(Library:ListConfigs())
+    end):AddButton("Load", function()
+        local n = Library.Options.ConfigList.Value
+        if not n then return Library:Notify("Select a config") end
+        local ok, err = Library:LoadConfig(n)
+        Library:Notify(ok and ("Loaded '" .. n .. "'") or ("Load failed: " .. err))
+    end)
+    cfg:AddButton("Refresh list", function() list:SetValues(Library:ListConfigs()) end)
+        :AddButton("Delete", function()
+            local n = Library.Options.ConfigList.Value
+            if n and Library:DeleteConfig(n) then Library:Notify("Deleted '" .. n .. "'"); list:SetValues(Library:ListConfigs()) end
+        end)
+    if not hasFS then cfg:AddLabel("Config saving needs an executor file system.", true) end
+    return tab
+end
+
+-- ─────────────────────────────────────────────────────────────────
+--  Unload
+-- ─────────────────────────────────────────────────────────────────
+function Library:Unload()
+    self.Unloaded = true
+    for _, c in ipairs(self._conns) do pcall(function() c:Disconnect() end) end
+    if self.OnUnload then pcall(self.OnUnload) end
+    self.ScreenGui:Destroy()
+end
+
+return Library
